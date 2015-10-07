@@ -246,6 +246,7 @@ class GenericXmlSyndicationFeed {
     $channel->appendChild($title);
     $desc = $doc->createElement('description', $this->description);
     $channel->appendChild($desc);
+    // FIX: <link> ma mit prefix http:
     $link = $doc->CreateElement('link', 'http:' . $this->linkSelf);
     $channel->appendChild($link);
     $lastBuildDate = $doc->createElement('lastBuildDate', date('r', $this->lastUpdated));
@@ -260,6 +261,7 @@ class GenericXmlSyndicationFeed {
       $iTitle = $doc->createElement('title', $i->title);
       $item->appendChild($iTitle);
 
+      // FIX: <link> ma mit prefix http:
       $iLink = $doc->createElement('link', 'http:' . $i->guid);
       $item->appendChild($iLink);
 
