@@ -63,988 +63,934 @@
  */
  
 if (!defined('MEDIAWIKI')) die();
-
-//Nefunguje wfMessage a nevim proc. Tohle je workaround ale je to pekne hnusne.
-require_once("SpecialWikiFeeds.i18n.php");
-$lang = 'en';
  
-$wgExtensionFunctions[] = 'wfWikiFeeds';
-$wgExtensionCredits['specialpage'][] = array(
-  'name'=>'Wiki Feeds',
-  'author'=>'Gregory Szorc <gregory.szorc@gmail.com>',
-  'url'=>'http://wiki.case.edu/User:Gregory.Szorc',
-  'description'=>'Produces syndicated feeds for MediaWiki.',
-  'version'=>'0.5'
-);
- 
-/**
- * Holds default settings for WikiFeeds
- *
- * Override values in LocalSettings.php after you include this file
- */
-$wgWikiFeedsSettings = array(
-	'cacheEnable' => false, //whether to enable the cache
-	'cacheRoot'		=> '/nfsn/content/ds-x/public/tmp/', //cache directory, with trailing slash
-	'cacheMaxAge'	=> 600, //max age of cached files, in seconds
-	'cachePruneFactor' => 100, //prune stale cache entries 1 out of every this many requests
-    'watchlistPrivate' => false, //when true, make per-user watchlists require special access token
-);
- 
-function wfWikiFeeds() {
-	global $wgHooks;
- 
-	if (!class_exists('GenericXmlSyndicationFeed')) {
+if (!class_exists('GenericXmlSyndicationFeed')) {
 		throw new MWException('GenericXmlSyndicationFeed class not loaded.  Please read the install directions!');
-	}
+}
  
-	require_once('SpecialPage.php');
- 
-	$wgExtensionMessagesFiles['SpecialWikiFeeds'] = dirname( __FILE__ ) . '/SpecialWikiFeeds.i18n.php';	
- 
-	$wgHooks['ParserAfterTidy'][] = 'wfWikiFeeds_Linker';
- 
-	class SpecialWikiFeeds extends SpecialPage {
-		const FEED_NEWESTARTICLES = 1;
-		const FEED_RECENTARTICLECHANGES = 2;
-		const FEED_RECENTUSERCHANGES = 3;
-		const FEED_USERWATCHLIST = 4;
-		const FEED_RECENTCATEGORYCHANGES = 5;
-		const FEED_NEWESTCATEGORYARTICLES = 6;
-		const FEED_NEWESTARTICLESBYUSER = 7;
-		const FEED_RECENTCHANGESNOTINCATEGORY = 8;
-		const FEED_NEWESTARTICLESNOTINCATEGORY = 9;
-		const DEFAULT_COUNT = 15;
- 
-		protected $_settings = array();
- 
-		public function __construct() {
-			global $wgWikiFeedsSettings;
- 
-			$this->_settings = $wgWikiFeedsSettings;
- 
-			SpecialPage::SpecialPage('WikiFeeds');
- 
-			//we automatically prune the cache randomly
-			if ($this->_settings['cacheEnable']) {
-				if (rand(1, $this->_settings['cachePruneFactor']) === 1) {
-					$this->_cachePrune();
-				}
+$wgHooks['ParserAfterTidy'][] = 'wfWikiFeeds_Linker';
+
+class SpecialWikiFeeds extends SpecialPage {
+	const FEED_NEWESTARTICLES = 1;
+	const FEED_RECENTARTICLECHANGES = 2;
+	const FEED_RECENTUSERCHANGES = 3;
+	const FEED_USERWATCHLIST = 4;
+	const FEED_RECENTCATEGORYCHANGES = 5;
+	const FEED_NEWESTCATEGORYARTICLES = 6;
+	const FEED_NEWESTARTICLESBYUSER = 7;
+	const FEED_RECENTCHANGESNOTINCATEGORY = 8;
+	const FEED_NEWESTARTICLESNOTINCATEGORY = 9;
+	const DEFAULT_COUNT = 15;
+
+	protected $_settings = array();
+
+	public function __construct() {
+		global $wgWikiFeedsSettings;
+
+		$this->_settings = $wgWikiFeedsSettings;
+
+		SpecialPage::SpecialPage('WikiFeeds');
+
+		//we automatically prune the cache randomly
+		if ($this->_settings['cacheEnable']) {
+			if (rand(1, $this->_settings['cachePruneFactor']) === 1) {
+				$this->_cachePrune();
 			}
- 
 		}
- 
-		public function execute($par = null) {
-			global $wgOut, $wgRequest, $wgServer, $wgWikiFeedsSettings, $wgUser;
-			global $messages, $lang;
- 
-			$request = isset($par) ? $par : $wgRequest->getText('request');
- 
-			if (!$request) {
-				$wgOut->addWikiText($messages[$lang]['wikifeeds_mainpage']);
- 
-				// do special voodoo if private watchlist is enabled
-				if ($wgWikiFeedsSettings['watchlistPrivate'] && $wgUser->isLoggedIn()) {
-					if (!$wgUser->getOption('watchlistToken')) {
-						$token = md5(microtime() . $wgUser->getID());
- 
-						$wgUser->setOption('watchlistToken', $token);
-						$wgUser->saveSettings();
-					}
- 
-					$token = $wgUser->getOption('watchlistToken');
- 
-					$privateFeedUrl = Title::newFromText('WikiFeeds/atom/watchlist/user/' . $wgUser->getName() . '/token/' . $token, NS_SPECIAL);
- 
-					// and display blurb about token
-					$wgOut->addWikiText(str_replace(array('$1','$2'), array($token, $privateFeedUrl->getFullUrl()),$messages[$lang]['wikifeeds_tokeninfo']));
+
+	}
+
+	public function execute($par = null) {
+		global $wgOut, $wgRequest, $wgServer, $wgWikiFeedsSettings, $wgUser;
+
+		$request = isset($par) ? $par : $wgRequest->getText('request');
+
+		if (!$request) {
+			$wgOut->addWikiText(wfMsg('wikifeeds_mainpage'));
+
+			// do special voodoo if private watchlist is enabled
+			if ($wgWikiFeedsSettings['watchlistPrivate'] && $wgUser->isLoggedIn()) {
+				if (!$wgUser->getOption('watchlistToken')) {
+					$token = md5(microtime() . $wgUser->getID());
+
+					$wgUser->setOption('watchlistToken', $token);
+					$wgUser->saveSettings();
 				}
+
+				$token = $wgUser->getOption('watchlistToken');
+
+				$privateFeedUrl = Title::newFromText('WikiFeeds/atom/watchlist/user/' . $wgUser->getName() . '/token/' . $token, NS_SPECIAL);
+
+				// and display blurb about token
+				$wgOut->addWikiText(wfMsg('wikifeeds_tokeninfo', $token, $privateFeedUrl->getFullUrl()));
 			}
-			else {
-				$arr = explode('/', $request);
- 
- 
-				//might have a valid request for a feed
-				if (count($arr) >= 2) {
-					$format = null;
-					$feed = null;
-					$count = self::DEFAULT_COUNT;
-					$namespace = null;
-					$params = array();
-					$areSane = true;
- 
-					if (strtolower($arr[0]) == 'atom') {
-						$format = GenericXmlSyndicationFeed::FORMAT_ATOM10;
+		}
+		else {
+			$arr = explode('/', $request);
+
+
+			//might have a valid request for a feed
+			if (count($arr) >= 2) {
+				$format = null;
+				$feed = null;
+				$count = self::DEFAULT_COUNT;
+				$namespace = null;
+				$params = array();
+				$areSane = true;
+
+				if (strtolower($arr[0]) == 'atom') {
+					$format = GenericXmlSyndicationFeed::FORMAT_ATOM10;
+				}
+				else if (strtolower($arr[0]) == 'rss') {
+					$format = GenericXmlSyndicationFeed::FORMAT_RSS20;
+				}
+				else {
+					$wgOut->addWikiText(wfMsg('wikifeeds_unknownformat'));
+					$areSane = false;
+				}
+
+				switch (strtolower($arr[1])) {
+					case 'newestarticles':
+						$feed = self:: FEED_NEWESTARTICLES;
+						break;
+
+					case 'recentarticlechanges':
+						$feed = self::FEED_RECENTARTICLECHANGES;
+						break;
+
+					case 'recentuserchanges':
+						$feed = self::FEED_RECENTUSERCHANGES;
+						break;
+
+					case 'newestuserarticles':
+						$feed = self::FEED_NEWESTARTICLESBYUSER;
+						break;
+
+					case 'watchlist':
+						$feed = self::FEED_USERWATCHLIST;
+						break;
+
+					case 'recentcategorychanges':
+						$feed = self::FEED_RECENTCATEGORYCHANGES;
+						break;
+
+					case 'newestcategoryarticles':
+						$feed = self::FEED_NEWESTCATEGORYARTICLES;
+						break;
+
+					case 'recentchangesnotincategory':
+						$feed = self::FEED_RECENTCHANGESNOTINCATEGORY;
+						break;
+
+					case 'newestarticlesnotincategory':
+						$feed = self::FEED_NEWESTARTICLESNOTINCATEGORY;
+						break; 
+						
+					default:
+						$wgOut->addWikiText(wfMsg('wikifeeds_unknownfeed'));
+						$areSane = false;
+				}
+
+				//now we look for additional parameters
+				if ( (count($arr) > 3) && ((count($arr) % 2) == 0) ) {
+					for ($i = 2; $i < count($arr); $i += 2) {
+						$params[$arr[$i]] = $arr[$i+1];
 					}
-					else if (strtolower($arr[0]) == 'rss') {
-						$format = GenericXmlSyndicationFeed::FORMAT_RSS20;
-					}
-					else {
-						$wgOut->addWikiText($messages[$lang]['wikifeeds_unknownformat']);
+				}
+
+				//if we are dealing with a category feed, we need a category specified
+				if ($feed === self::FEED_RECENTCATEGORYCHANGES || $feed === self::FEED_NEWESTCATEGORYARTICLES ||
+					$feed === self::FEED_RECENTCHANGESNOTINCATEGORY || $feed === self::FEED_NEWESTARTICLESNOTINCATEGORY) {
+					if (!array_key_exists('category', $params)) {
+						$wgOut->addWikiText(wfMsg('wikifeeds_undefinedcategory'));
 						$areSane = false;
 					}
- 
-					switch (strtolower($arr[1])) {
-						case 'newestarticles':
-							$feed = self:: FEED_NEWESTARTICLES;
-							break;
- 
-						case 'recentarticlechanges':
-							$feed = self::FEED_RECENTARTICLECHANGES;
-							break;
- 
-						case 'recentuserchanges':
-							$feed = self::FEED_RECENTUSERCHANGES;
-							break;
- 
-						case 'newestuserarticles':
-							$feed = self::FEED_NEWESTARTICLESBYUSER;
-							break;
- 
-						case 'watchlist':
-							$feed = self::FEED_USERWATCHLIST;
-							break;
- 
-						case 'recentcategorychanges':
-							$feed = self::FEED_RECENTCATEGORYCHANGES;
-							break;
- 
-						case 'newestcategoryarticles':
-							$feed = self::FEED_NEWESTCATEGORYARTICLES;
-							break;
+					else {
+						//verify category is valid
+						if (!$this->categoryExists($params['category'])) {
+							$wgOut->addWikiText(wfMsg('wikifeeds_categorynoexist'));
+							$areSane = false;
+						}
+					}
+				}					
 
-						case 'recentchangesnotincategory':
-							$feed = self::FEED_RECENTCHANGESNOTINCATEGORY;
-							break;
- 
-						case 'newestarticlesnotincategory':
-							$feed = self::FEED_NEWESTARTICLESNOTINCATEGORY;
-							break; 
-							
-						default:
-							$wgOut->addWikiText($messages[$lang]['wikifeeds_unknownfeed']);
-							$areSane = false;
+				//if we are asking for a user feed, we need the user parameter
+				if ($feed === self::FEED_RECENTUSERCHANGES || $feed === self::FEED_USERWATCHLIST || $feed === self::FEED_NEWESTARTICLESBYUSER) {
+					if (!array_key_exists('user', $params)) {
+						$wgOut->addWikiText(wfMsg('wikifeeds_undefineduser'));
+						$areSane = false;
 					}
- 
-					//now we look for additional parameters
-					if ( (count($arr) > 3) && ((count($arr) % 2) == 0) ) {
-						for ($i = 2; $i < count($arr); $i += 2) {
-							$params[$arr[$i]] = $arr[$i+1];
-						}
-					}
- 
-					//if we are dealing with a category feed, we need a category specified
-					if ($feed === self::FEED_RECENTCATEGORYCHANGES || $feed === self::FEED_NEWESTCATEGORYARTICLES ||
-						$feed === self::FEED_RECENTCHANGESNOTINCATEGORY || $feed === self::FEED_NEWESTARTICLESNOTINCATEGORY) {
-						if (!array_key_exists('category', $params)) {
-							$wgOut->addWikiText($messages[$lang]['wikifeeds_undefinedcategory']);
+					else {
+						//verify the user exists
+						$userId = User::idFromName($params['user']);
+
+						if (is_null($userId) || $userId === 0) {
+							$wgOut->addWikiText(wfMsg('wikifeeds_unknownuser'));
 							$areSane = false;
-						}
-						else {
-							//verify category is valid
-							if (!$this->categoryExists($params['category'])) {
-								$wgOut->addWikiText($messages[$lang]['wikifeeds_categorynoexist']);
+						} else if ($feed === self::FEED_USERWATCHLIST && $wgWikiFeedsSettings['watchlistPrivate']) {
+							if (!array_key_exists('token', $params)) {
+								$wgOut->addWikiText(wfMsg('wikifeeds_nowatchlisttoken'));
 								$areSane = false;
-							}
-						}
-					}					
- 
-					//if we are asking for a user feed, we need the user parameter
-					if ($feed === self::FEED_RECENTUSERCHANGES || $feed === self::FEED_USERWATCHLIST || $feed === self::FEED_NEWESTARTICLESBYUSER) {
-						if (!array_key_exists('user', $params)) {
-							$wgOut->addWikiText($messages[$lang]['wikifeeds_undefineduser']);
-							$areSane = false;
-						}
-						else {
-							//verify the user exists
-							$userId = User::idFromName($params['user']);
- 
-							if (is_null($userId) || $userId === 0) {
-								$wgOut->addWikiText($messages[$lang]['wikifeeds_unknownuser']);
-								$areSane = false;
-							} else if ($feed === self::FEED_USERWATCHLIST && $wgWikiFeedsSettings['watchlistPrivate']) {
-								if (!array_key_exists('token', $params)) {
-									$wgOut->addWikiText($messages[$lang]['wikifeeds_nowatchlisttoken']);
+							} else {
+								$token = $params['token'];
+
+								// verify token is sane
+								$user = User::newFromId($userId);
+
+								if ($token != $user->getOption('watchlistToken')) {
+									$wgOut->addWikiText(wfMsg('wikifeeds_invalidwatchlisttoken'));
 									$areSane = false;
-								} else {
-									$token = $params['token'];
- 
-									// verify token is sane
-									$user = User::newFromId($userId);
- 
-									if ($token != $user->getOption('watchlistToken')) {
-										$wgOut->addWikiText($messages[$lang]['wikifeeds_invalidwatchlisttoken']);
-										$areSane = false;
-									}
 								}
 							}
 						}
 					}
- 
-					if (array_key_exists('count', $params) && ctype_digit($params['count']) && $params['count'] > 0) {
-						$count = $params['count'];
-					}
+				}
 
-					if (array_key_exists('namespace', $params)) {
-						
-						$ns = $params['namespace'];
-						
-						if (ctype_digit($ns) && (MWNamespace::exists($ns)) ) {	
-							// parameter is a number
-							$namespace = $ns;
-						} else if (MWNamespace::exists(MWNamespace::getCanonicalIndex($ns))) { 
-							// parameter is a text
-							$namespace = MWNamespace::getCanonicalIndex($ns);
-						} else if (strtolower($ns) == 'main' || $ns == '0'){ 
-							// parameter is MAIN namespace (ns_id:0)
-							$namespace = 0; 
-						} else {
-							//namespace does not exist, show nothing
-							$wgOut->addWikiText($messages[$lang]['wikifeeds_namespacenoexist']);
-							$areSane = false;
-							$namespace = "NULL"; 
-						}
-					}					
+				if (array_key_exists('count', $params) && ctype_digit($params['count']) && $params['count'] > 0) {
+					$count = $params['count'];
+				}
+
+				if (array_key_exists('namespace', $params)) {
 					
-					if (array_key_exists('unique', $params) && $params['count'] != 'false') {
-						$unique = true;
+					$ns = $params['namespace'];
+					
+					if (ctype_digit($ns) && (MWNamespace::exists($ns)) ) {	
+						// parameter is a number
+						$namespace = $ns;
+					} else if (MWNamespace::exists(MWNamespace::getCanonicalIndex($ns))) { 
+						// parameter is a text
+						$namespace = MWNamespace::getCanonicalIndex($ns);
+					} else if (strtolower($ns) == 'main' || $ns == '0'){ 
+						// parameter is MAIN namespace (ns_id:0)
+						$namespace = 0; 
 					} else {
-						$unique = false;
+						//namespace does not exist, show nothing
+						$wgOut->addWikiText(wfMsg('wikifeeds_namespacenoexist'));
+						$areSane = false;
+						$namespace = "NULL"; 
 					}
- 
-					//we are sane, so let's create a feed
-					if ($areSane) {
-						$wgOut->disable();
- 
- 
-						//if we successfully fetched a feed from the cache
-						if ($this->_settings['cacheEnable'] && $cached = $this->_cacheFetchFeed($feed, $format, $params)) {
-							//$cached is an array containing feed text and some metadata
-							header('Content-Type: ' . $cached['content-type']);
-							print $cached['content'];
- 
-						} else { //no cache was hit, assemble the feed
- 
-							$Feed = new GenericXmlSyndicationFeed($format);
- 
-							switch ($feed) {
-								case self::FEED_NEWESTARTICLES:
-									$this->makeNewestArticles($Feed, $namespace, $count);
-									break;
- 
-								case self::FEED_RECENTARTICLECHANGES:
-									$this->makeRecentArticleChanges($Feed, $namespace, $count, $unique);
-									break;
- 
-								case self::FEED_NEWESTARTICLESBYUSER:
-									$this->makeNewestArticleByUser($Feed, $params['user'], $namespace, $count);
-									break;
- 
-								case self::FEED_RECENTUSERCHANGES:
-									$this->makeRecentUserChanges($Feed, $params['user'], $namespace, $count);
-									break;
- 
-								case self::FEED_USERWATCHLIST:
-									$this->makeUserWatchlist($Feed, $params['user'], $namespace, $count);
-									break;
- 
-								case self::FEED_RECENTCATEGORYCHANGES:
-									$this->makeRecentCategoryPageChanges($Feed, $params['category'], $namespace, $count);
-									break;
- 
-								case self::FEED_NEWESTCATEGORYARTICLES:
-									$this->makeNewestArticlesInCategory($Feed, $params['category'], $namespace, $count);
-									break;
-									
-								case self::FEED_RECENTCHANGESNOTINCATEGORY:
-									$this->makeRecentPageChangesNotInCategory($Feed, $params['category'], $namespace, $count);
-									break;
- 
-								case self::FEED_NEWESTARTICLESNOTINCATEGORY:
-									$this->makeNewestArticlesNotInCategory($Feed, $params['category'], $namespace, $count);
-									break; 
-									
-								default:
- 
-									echo 'unknown feed';
-							}
- 
-							$feedDate = 0;
-							foreach ($Feed->items as $i) {
-								if ($i->mArticle->mTimestamp > $feedDate) $feedDate = $i->mArticle->mTimestamp;
-							}
- 
-							$Feed->lastUpdated = wfTimestamp(TS_UNIX, $feedDate);
- 
-							$Feed->linkSelf = $wgServer.$_SERVER['REQUEST_URI'];
- 
-							$Feed->sendOutput();
- 
-							//finally, cache the feed
-							if ($this->_settings['cacheEnable']) {
-								$this->_cacheSaveFeed($Feed, $feed, $format, $params);
-							}
-						}
-					}
+				}					
+				
+				if (array_key_exists('unique', $params) && $params['count'] != 'false') {
+					$unique = true;
+				} else {
+					$unique = false;
 				}
- 
-			}
- 
- 
-			$this->setHeaders();
- 
-		}
- 
-		/**
-		 * This function checks to see if a category exists
-		 * It would be really nice if MediaWiki had this method available, but all the SQL is inline
-		 * Comparison is case sensitive
-		 */
-		protected function categoryExists($cat) {
-			$dbr =& wfGetDB( DB_SLAVE );
-			$categorylinks = $dbr->tableName( 'categorylinks' );
-			if ($result = $dbr->safeQuery("SELECT count(*) FROM $categorylinks WHERE cl_to=?", $cat)) {
-				if ($row = $dbr->fetchRow($result)) {
-					return $row[0] > 0 ? true : false;
-				}
-			}
- 
-			return false;
- 
-		}
- 
-		/**
-		 * Create a feed for newest articles in the wiki
-		 */
-		protected function makeNewestArticles(GenericXmlSyndicationFeed &$feed, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
 
-			$feed->title = $messages[$lang]['wikifeeds_feed_newestarticles_title'];
-			$feed->description = $messages[$lang]['wikifeeds_feed_newestarticles_description'];
- 
-			$altUrlTitle = Title::makeTitle(NS_SPECIAL, 'Newpages');
-			$feed->linkAlternate = $altUrlTitle->getFullURL();
- 
-			// filter namespace
-			if(isset($namespace)) {
-				$namespace_sql = "AND rc_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}
-			
-			$dbr = wfGetDB(DB_SLAVE);
- 
-			extract($dbr->tableNames('recentchanges', 'page', 'text'));
- 
-			$sql = "SELECT 'Newpages' as type, rc_namespace AS namespace, rc_title AS value, rc_user AS user,
-        rc_user_text AS user_text,
-        rc_comment AS comment,
-        rc_timestamp AS timestamp,
-        rc_id AS rcid,
-        page_id AS page,
-        page_len AS length,
-        page_latest AS latest
-        FROM $recentchanges,$page
-        WHERE rc_cur_id=page_id AND rc_new=1 AND page_is_redirect=0 $namespace_sql
-        ORDER BY rc_timestamp DESC LIMIT $count";
- 
-			if ($result = $dbr->query($sql)) {
-				if ($dbr->numRows($result)) {
-					while ($row = $dbr->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title);						
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
-						}
-						
-					}
-				}
-			}
-		}
- 
-		/**
-		 * Feed for recently changed articles
-		 *
-		 * @todo Implement $unique changes to SQL query
-		 */
-		protected function makeRecentArticleChanges(GenericXmlSyndicationFeed &$feed, $namespace, $count = self::DEFAULT_COUNT, $unique = false) {
-			global $lang, $messages;
+				//we are sane, so let's create a feed
+				if ($areSane) {
+					$wgOut->disable();
 
-			$feed->title = $messages[$lang]['wikifeeds_feed_recentarticlechanges_title'];
-			$feed->description = $messages[$lang]['wikifeeds_feed_recentarticlechanges_description'];
- 
-			$altUrlTitle = Title::makeTitle(NS_SPECIAL, 'Recentchanges');
-			$this->linkAlternate = $altUrlTitle->getFullURL();
- 
-			// filter namespace
-			if(isset($namespace)) {
-				$namespace_sql = "AND rc_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}
-			
-			$db = wfGetDB(DB_SLAVE);
- 
-			extract($db->tableNames('recentchanges','page', 'revision'));
- 
-			$sql = "SELECT rev_id AS revid, rev_page AS page, rev_user_text as user, rc_id AS rcid 
-      FROM $recentchanges, $revision
-      WHERE rc_this_oldid=rev_id AND rev_deleted=0 AND rev_minor_edit=0 $namespace_sql
-      ORDER BY rev_id DESC LIMIT $count";
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
+
+					//if we successfully fetched a feed from the cache
+					if ($this->_settings['cacheEnable'] && $cached = $this->_cacheFetchFeed($feed, $format, $params)) {
+						//$cached is an array containing feed text and some metadata
+						header('Content-Type: ' . $cached['content-type']);
+						print $cached['content'];
+
+					} else { //no cache was hit, assemble the feed
+
+						$Feed = new GenericXmlSyndicationFeed($format);
+
+						switch ($feed) {
+							case self::FEED_NEWESTARTICLES:
+								$this->makeNewestArticles($Feed, $namespace, $count);
+								break;
+
+							case self::FEED_RECENTARTICLECHANGES:
+								$this->makeRecentArticleChanges($Feed, $namespace, $count, $unique);
+								break;
+
+							case self::FEED_NEWESTARTICLESBYUSER:
+								$this->makeNewestArticleByUser($Feed, $params['user'], $namespace, $count);
+								break;
+
+							case self::FEED_RECENTUSERCHANGES:
+								$this->makeRecentUserChanges($Feed, $params['user'], $namespace, $count);
+								break;
+
+							case self::FEED_USERWATCHLIST:
+								$this->makeUserWatchlist($Feed, $params['user'], $namespace, $count);
+								break;
+
+							case self::FEED_RECENTCATEGORYCHANGES:
+								$this->makeRecentCategoryPageChanges($Feed, $params['category'], $namespace, $count);
+								break;
+
+							case self::FEED_NEWESTCATEGORYARTICLES:
+								$this->makeNewestArticlesInCategory($Feed, $params['category'], $namespace, $count);
+								break;
+								
+							case self::FEED_RECENTCHANGESNOTINCATEGORY:
+								$this->makeRecentPageChangesNotInCategory($Feed, $params['category'], $namespace, $count);
+								break;
+
+							case self::FEED_NEWESTARTICLESNOTINCATEGORY:
+								$this->makeNewestArticlesNotInCategory($Feed, $params['category'], $namespace, $count);
+								break; 
+								
+							default:
+
+								echo 'unknown feed';
+						}
+
+						$feedDate = 0;
+						foreach ($Feed->items as $i) {
+							if ($i->mArticle->mTimestamp > $feedDate) $feedDate = $i->mArticle->mTimestamp;
+						}
+
+						$Feed->lastUpdated = wfTimestamp(TS_UNIX, $feedDate);
+
+						$Feed->linkSelf = $wgServer.$_SERVER['REQUEST_URI'];
+
+						$Feed->sendOutput();
+
+						//finally, cache the feed
+						if ($this->_settings['cacheEnable']) {
+							$this->_cacheSaveFeed($Feed, $feed, $format, $params);
 						}
 					}
 				}
 			}
+
 		}
- 
-		/**
-		 * Recent articles created by a specified user
-		 */
-		protected function makeNewestArticleByUser(GenericXmlSyndicationFeed &$feed, $user, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
- 
-			$u = User::newFromName($user);
- 
-			if (!$u) return;
- 
-			$feed->title = str_replace('$1', $user, $messages[$lang]['wikifeeds_feed_newestarticlesbyuser_title']);
-			$feed->description = str_replace('$1', $user, $messages[$lang]['wikifeeds_feed_newestarticlesbyuser_description']);
- 
-			$altUrlTitle = Title::makeTitle(NS_SPECIAL, "Contributions/$user");
-			$feed->linkAlternate = $altUrlTitle->getFullURL();
- 
-			$author = array();
-			$author['name'] = $user;
-			$author['email'] = $u->getEmail();
-			$userPage = $u->getUserPage();
-			$author['uri'] = $userPage->getFullURL();
- 
-			$feed->addAuthor($author);
-		 
-			// filter namespace
-			if(isset($namespace)) {
-				$namespace_sql = "AND rc_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}
-			
-			$db = wfGetDB(DB_SLAVE);
- 
-			extract($db->tableNames('recentchanges','page', 'revision'));
- 
-			$sql = "SELECT
-      rc_id AS rcid,
-      page_id AS page,
-      page_latest AS latest
-      FROM $recentchanges,$page
-      WHERE rc_cur_id=page_id AND rc_new=1 AND page_is_redirect=0 AND rc_user_text='{$u->getName()}' $namespace_sql
-      ORDER BY rc_timestamp DESC LIMIT $count";
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title);
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-							        $feed->addItem($item);
-						}						
-					}
-				}
-			}
-		}
- 
-		/**
-		 * Recent article changes by a specified user
-		 */
-		protected function makeRecentUserChanges(GenericXmlSyndicationFeed &$feed, $user, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
 
-			$u = User::newFromName($user);
- 
-			if (!$u) return;
- 
-			$feed->title = str_replace('$1', $user, $messages[$lang]['wikifeeds_feed_recentuserchanges_title']);
-			$feed->description = str_replace('$1', $user, $messages[$lang]['wikifeeds_feed_recentuserchanges_description']);
- 
-			$altUrlTitle = Title::makeTitle(NS_SPECIAL, "Contributions/$user");
-			$feed->linkAlternate = $altUrlTitle->getFullURL();
- 
-			$author = array();
-			$author['name'] = $user;
-			$author['email'] = $u->getEmail();
-			$userPage = $u->getUserPage();
-			$author['uri'] = $userPage->getFullURL();
- 
-			$feed->addAuthor($author);
-			
-			// filter namespace
-			if (isset($namespace)) {
-				$namespace_sql = "AND rc_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}			
- 
-			$db = wfGetDB(DB_SLAVE);
- 
-			extract($db->tableNames('recentchanges', 'page', 'revision'));
- 
-			$sql = "SELECT rev_id AS revid, rev_page AS page, rev_user_text as user, rc_id AS rcid
-      FROM $recentchanges, $revision
-      WHERE rc_this_oldid=rev_id AND rev_deleted=0 AND rev_user_text='{$u->getName()}' AND rev_minor_edit=0 $namespace_sql
-      ORDER BY rev_id DESC LIMIT $count";
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']); 
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
-						}
-					}
-				}
-			}
-		}
- 
-		/**
-		 * Watchlist for a specified user
-		 */
-		protected function makeUserWatchlist(GenericXmlSyndicationFeed &$feed, $user, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
 
-			$feed->title = str_replace('$1', $user, $messages[$lang]['wikifeeds_feed_userwatchlist_title']);
-			$feed->description = str_replace('$1', $user, $messages[$lang]['wikifeeds_feed_userwatchlist_description']);
- 
-			$u = User::newFromName($user);
- 
-			if (!$u) return;
- 
-			$author = array();
-			$author['name'] = $user;
-			$author['email'] = $u->getEmail();
-			$userPage = $u->getUserPage();
-			$author['uri'] = $userPage->getFullURL();
- 
-			$feed->addAuthor($author);
-					
-			// filter namespace
-			if (isset($namespace)) {
-				$namespace_sql = "AND rc_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}
-			
-			$db = wfGetDB(DB_SLAVE);
- 
-			extract($db->tableNames('recentchanges', 'page', 'revision', 'watchlist'));
- 
-			$sql = "SELECT rev_id as revid, rev_page AS page, rc_id AS rcid
-      FROM $recentchanges, $revision, $watchlist
-      WHERE wl_user={$u->getID()} AND rc_namespace=wl_namespace AND rc_title=wl_title
-      AND rev_id=rc_this_oldid $namespace_sql
-      ORDER BY rev_id DESC LIMIT $count";
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
-						}
-					}
-				}
-			}
-		}
- 
-		/**
-		 * Recently changes articles in a specified category
-		 */
-		protected function makeRecentCategoryPageChanges(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
+		$this->setHeaders();
 
-			$feed->title = str_replace('$1', $category, $messages[$lang]['wikifeeds_feed_recentcategorychanges_title']);
-			$feed->description = str_replace('$1', $category, $messages[$lang]['wikifeeds_feed_recentcategorychanges_description']);
- 
-			$pagesIn = $this->getPagesInCategory($category);
+	}
 
-			// filter namespace
-			if (isset($namespace)) {
-				$namespace_sql = "AND rc_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}			
-			
-			$db = wfGetDB(DB_SLAVE);
-			extract($db->tableNames('recentchanges', 'page', 'revision'));
- 
-			$sql = "SELECT rev_id AS revid, rev_page AS page, rc_id AS rcid
-      FROM $recentchanges, $revision
-      WHERE rev_page IN (".implode(',', $pagesIn).")
-      AND rev_deleted=0 AND rc_this_oldid=rev_id AND rev_minor_edit=0 $namespace_sql
-      ORDER BY rev_id DESC LIMIT $count";
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
-						}
-					}
-				}
-			}
- 
-		}
- 
-		/**
-		 * Newest articles in a specified category
-		 */
-		protected function makeNewestArticlesInCategory(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
-
-			$catTitle = Title::newFromText($category, NS_CATEGORY);
- 
-			$feed->title = str_replace('$1', $catTitle->getText(), $messages[$lang]['wikifeeds_feed_newestarticlesincategory_title']);
-			$feed->description = str_replace('$1', $catTitle->getText(), $messages[$lang]['wikifeeds_feed_newestarticlesincategory_description']);
- 
-			// filter namespace
-			if (isset($namespace)) {
-				$namespace_sql = "AND page_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}	
-			
-			$db = wfGetDB(DB_SLAVE);
- 
-			extract($db->tableNames('page','categorylinks'));
-
-			/* pro potreby novinek recyklujeme clanky, nejnovejsi je tedy ten, na kterem byla udelana velka zmena */
-			$sql = "SELECT
-	page_id AS page, MAX(rev_timestamp) AS cas
-	FROM revision, $page, $categorylinks
-	WHERE cl_to='{$catTitle->getDBkey()}' AND cl_from=page_id AND rev_page=page_id AND rev_minor_edit=0 $namespace_sql 
-	GROUP BY page_id ORDER BY cas DESC LIMIT $count";
-
-/** 
-			$sql = "SELECT
-      page_id AS page
-      FROM $page,$categorylinks
-      WHERE cl_to='{$catTitle->getDBkey()}' AND cl_from=page_id $namespace_sql
-      ORDER BY cl_timestamp DESC LIMIT $count";
-*/
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title); 
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
-						}
-					}
-				}
+	/**
+	 * This function checks to see if a category exists
+	 * It would be really nice if MediaWiki had this method available, but all the SQL is inline
+	 * Comparison is case sensitive
+	 */
+	protected function categoryExists($cat) {
+		$dbr =& wfGetDB( DB_SLAVE );
+		$categorylinks = $dbr->tableName( 'categorylinks' );
+		if ($result = $dbr->safeQuery("SELECT count(*) FROM $categorylinks WHERE cl_to=?", $cat)) {
+			if ($row = $dbr->fetchRow($result)) {
+				return $row[0] > 0 ? true : false;
 			}
 		}
 
-			/**
-		 * Recently changes articles in a specified category
-		 */
-		protected function makeRecentPageChangesNotInCategory(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
+		return false;
 
-			$feed->title = str_replace('$1', $category, $messages[$lang]['wikifeeds_feed_recentchangesnotincategory_title']);
-			$feed->description = str_replace('$1', $category, $messages[$lang]['wikifeeds_feed_recentchangesnotincategory_description']);
- 
-			$pagesIn = $this->getPagesInCategory($category);
+	}
 
-			// filter namespace
-			if (isset($namespace)) {
-				$namespace_sql = "AND rc_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}			
-			
-			$db = wfGetDB(DB_SLAVE);
-			extract($db->tableNames('recentchanges', 'page', 'revision'));
- 
-			$sql = "SELECT rev_id AS revid, rev_page AS page, rc_id AS rcid
-      FROM $recentchanges, $revision
-      WHERE rev_page NOT IN (".implode(',', $pagesIn).")
-      AND rev_deleted=0 AND rc_this_oldid=rev_id AND rev_minor_edit=0 $namespace_sql
-      ORDER BY rev_id DESC LIMIT $count";
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
-						}
-					}
-				}
-			}
- 
-		}
- 
-		/**
-		 * Newest articles NOT in a specified category
-		 */
-		protected function makeNewestArticlesNotInCategory(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
-			global $lang, $messages;
+	/**
+	 * Create a feed for newest articles in the wiki
+	 */
+	protected function makeNewestArticles(GenericXmlSyndicationFeed &$feed, $namespace, $count = self::DEFAULT_COUNT) {
+		$feed->title = wfMsg('wikifeeds_feed_newestarticles_title');
+		$feed->description = wfMsg('wikifeeds_feed_newestarticles_description');
 
-			$catTitle = Title::newFromText($category, NS_CATEGORY);
- 
-			$feed->title = str_replace('$1', $catTitle->getText(), $messages[$lang]['wikifeeds_feed_newestarticlesnotincategory_title']);
-			$feed->description = str_replace('$1', $catTitle->getText(), $messages[$lang]['wikifeeds_feed_newestarticlesnotincategory_description']);
- 
-			$pagesIn = $this->getPagesInCategory($category);
-			
-			// filter namespace
-			if (isset($namespace)) {
-				$namespace_sql = "AND page_namespace = $namespace";
-			} else {
-				$namespace_sql = "";
-			}	
-			
-			$db = wfGetDB(DB_SLAVE);
- 
-			extract($db->tableNames('page','recentchanges'));
- 
-			$sql = "SELECT page_id AS page
-        FROM $recentchanges,$page
-        WHERE page_id NOT IN (".implode(',', $pagesIn).") AND rc_cur_id=page_id AND rc_new=1 AND page_is_redirect=0 $namespace_sql
-        ORDER BY rc_timestamp DESC LIMIT $count";
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$title = Title::newFromID($row['page']);
-						$item = new MediaWikiFeedItem($title); 
-						if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
-						        $feed->addItem($item);
-						}
-					}
-				}
-			}
+		$altUrlTitle = Title::makeTitle(NS_SPECIAL, 'Newpages');
+		$feed->linkAlternate = $altUrlTitle->getFullURL();
+
+		// filter namespace
+		if(isset($namespace)) {
+			$namespace_sql = "AND rc_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
 		}
 		
-		/**
-		 * Return all the pages in a given category
-		 */
-		protected function getPagesInCategory($catName) {
-			$db = wfGetDB(DB_SLAVE);
- 
-			$catTitle = Title::newFromText($catName, NS_CATEGORY);
- 
-			$db = wfGetDB(DB_SLAVE);
- 
-			extract($db->tableNames('categorylinks'));
- 
-			$sql = "SELECT cl_from AS page FROM $categorylinks WHERE cl_to='{$catTitle->getDBkey()}'";
- 
-			$r = array();
- 
-			if ($result = $db->query($sql)) {
-				if ($db->numRows($result)) {
-					while ($row = $db->fetchRow($result)) {
-						$r[] = $row['page'];
+		$dbr = wfGetDB(DB_SLAVE);
+
+		extract($dbr->tableNames('recentchanges', 'page', 'text'));
+
+		$sql = "SELECT 'Newpages' as type, rc_namespace AS namespace, rc_title AS value, rc_user AS user,
+rc_user_text AS user_text,
+rc_comment AS comment,
+rc_timestamp AS timestamp,
+rc_id AS rcid,
+page_id AS page,
+page_len AS length,
+page_latest AS latest
+FROM $recentchanges,$page
+WHERE rc_cur_id=page_id AND rc_new=1 AND page_is_redirect=0 $namespace_sql
+ORDER BY rc_timestamp DESC LIMIT $count";
+
+		if ($result = $dbr->query($sql)) {
+			if ($dbr->numRows($result)) {
+				while ($row = $dbr->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title);						
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
+					}
+					
+				}
+			}
+		}
+	}
+
+	/**
+	 * Feed for recently changed articles
+	 *
+	 * @todo Implement $unique changes to SQL query
+	 */
+	protected function makeRecentArticleChanges(GenericXmlSyndicationFeed &$feed, $namespace, $count = self::DEFAULT_COUNT, $unique = false) {
+		$feed->title = wfMsg('wikifeeds_feed_recentarticlechanges_title');
+		$feed->description = wfMsg('wikifeeds_feed_recentarticlechanges_description');
+
+		$altUrlTitle = Title::makeTitle(NS_SPECIAL, 'Recentchanges');
+		$this->linkAlternate = $altUrlTitle->getFullURL();
+
+		// filter namespace
+		if(isset($namespace)) {
+			$namespace_sql = "AND rc_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
+		}
+		
+		$db = wfGetDB(DB_SLAVE);
+
+		extract($db->tableNames('recentchanges','page', 'revision'));
+
+		$sql = "SELECT rev_id AS revid, rev_page AS page, rev_user_text as user, rc_id AS rcid 
+FROM $recentchanges, $revision
+WHERE rc_this_oldid=rev_id AND rev_deleted=0 AND rev_minor_edit=0 $namespace_sql
+ORDER BY rev_id DESC LIMIT $count";
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
 					}
 				}
 			}
- 
-			return $r;
- 
 		}
- 
-		/**
-		 * Fetch a feed from the cache
-		 *
-		 * This function will try to fetch a feed specified by type, format
-		 * and parameters from the cache.  If the feed does not exist in the
-		 * cache or if the cache entry is stale, we don't return anything
-		 *
-		 * @param $feed Feed type constant
-		 * @param $format Feed format constant
-		 * @param array $params Parameters to pass to the feed constructor
-		 *
-		 * @return array Array that describes the feed|false on failure
-		 */
-		protected function _cacheFetchFeed($feed, $format, $params) {
-			$filename = $this->_cacheFilename($feed, $format, $params);
- 
-			if (file_exists($filename) && is_readable($filename)) {
-				if ( (time() - filemtime($filename)) < $this->_settings['cacheMaxAge']) {
-					$content = unserialize(file_get_contents($filename));
- 
-					if (is_array($content)) {
-						return $content;
+	}
+
+	/**
+	 * Recent articles created by a specified user
+	 */
+	protected function makeNewestArticleByUser(GenericXmlSyndicationFeed &$feed, $user, $namespace, $count = self::DEFAULT_COUNT) {
+
+		$u = User::newFromName($user);
+
+		if (!$u) return;
+
+		$feed->title = wfMsg('wikifeeds_feed_newestarticlesbyuser_title', $user);
+		$feed->description = wfMsg('wikifeeds_feed_newestarticlesbyuser_description', $user);
+
+		$altUrlTitle = Title::makeTitle(NS_SPECIAL, "Contributions/$user");
+		$feed->linkAlternate = $altUrlTitle->getFullURL();
+
+		$author = array();
+		$author['name'] = $user;
+		$author['email'] = $u->getEmail();
+		$userPage = $u->getUserPage();
+		$author['uri'] = $userPage->getFullURL();
+
+		$feed->addAuthor($author);
+	 
+		// filter namespace
+		if(isset($namespace)) {
+			$namespace_sql = "AND rc_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
+		}
+		
+		$db = wfGetDB(DB_SLAVE);
+
+		extract($db->tableNames('recentchanges','page', 'revision'));
+
+		$sql = "SELECT
+rc_id AS rcid,
+page_id AS page,
+page_latest AS latest
+FROM $recentchanges,$page
+WHERE rc_cur_id=page_id AND rc_new=1 AND page_is_redirect=0 AND rc_user_text='{$u->getName()}' $namespace_sql
+ORDER BY rc_timestamp DESC LIMIT $count";
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title);
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+							$feed->addItem($item);
+					}						
+				}
+			}
+		}
+	}
+
+	/**
+	 * Recent article changes by a specified user
+	 */
+	protected function makeRecentUserChanges(GenericXmlSyndicationFeed &$feed, $user, $namespace, $count = self::DEFAULT_COUNT) {
+		$u = User::newFromName($user);
+
+		if (!$u) return;
+
+		$feed->title = wfMsg('wikifeeds_feed_recentuserchanges_title', $user);
+		$feed->description = wfMsg('wikifeeds_feed_recentuserchanges_description', $user);
+
+		$altUrlTitle = Title::makeTitle(NS_SPECIAL, "Contributions/$user");
+		$feed->linkAlternate = $altUrlTitle->getFullURL();
+
+		$author = array();
+		$author['name'] = $user;
+		$author['email'] = $u->getEmail();
+		$userPage = $u->getUserPage();
+		$author['uri'] = $userPage->getFullURL();
+
+		$feed->addAuthor($author);
+		
+		// filter namespace
+		if (isset($namespace)) {
+			$namespace_sql = "AND rc_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
+		}			
+
+		$db = wfGetDB(DB_SLAVE);
+
+		extract($db->tableNames('recentchanges', 'page', 'revision'));
+
+		$sql = "SELECT rev_id AS revid, rev_page AS page, rev_user_text as user, rc_id AS rcid
+FROM $recentchanges, $revision
+WHERE rc_this_oldid=rev_id AND rev_deleted=0 AND rev_user_text='{$u->getName()}' AND rev_minor_edit=0 $namespace_sql
+ORDER BY rev_id DESC LIMIT $count";
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']); 
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
 					}
-				} else {
-					//the file is old, we might as well prune it now
-					//to save a few system calls
-					unlink($filename);
 				}
 			}
- 
-			return false;
 		}
- 
-		/**
-		 * Save a specified feed object corresponding to given parameters to the
-		 * cache
-		 */
-		protected function _cacheSaveFeed(GenericXmlSyndicationFeed $feedObj, $feed, $format, $params) {
-			$filename = $this->_cacheFilename($feed, $format, $params);
- 
-			$cacheContent = array(
-    		'content-type' => $feedObj->contentType,
-    		'content' => $feedObj->getContent(false)
-			);
- 
-			file_put_contents($filename, serialize($cacheContent), LOCK_EX);
+	}
+
+	/**
+	 * Watchlist for a specified user
+	 */
+	protected function makeUserWatchlist(GenericXmlSyndicationFeed &$feed, $user, $namespace, $count = self::DEFAULT_COUNT) {
+		$feed->title = wfMsg('wikifeeds_feed_userwatchlist_title', $user);
+		$feed->description = wfMsg('wikifeeds_feed_userwatchlist_description', $user);
+
+		$u = User::newFromName($user);
+
+		if (!$u) return;
+
+		$author = array();
+		$author['name'] = $user;
+		$author['email'] = $u->getEmail();
+		$userPage = $u->getUserPage();
+		$author['uri'] = $userPage->getFullURL();
+
+		$feed->addAuthor($author);
+				
+		// filter namespace
+		if (isset($namespace)) {
+			$namespace_sql = "AND rc_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
 		}
- 
- 
-		/**
-		 * Returns the filename a specified feed should have
-		 *
-		 * @param $feed Feed type constant
-		 * @param $foramt Feed format constant
-		 * @param array $params Array of feed parameters
-		 */
-		protected function _cacheFilename($feed, $format, $params) {
-			$s = $this->_settings['cacheRoot'] . 'wikifeeds_cache-';
- 
-			$s .= md5($feed.$format.serialize($params));
- 
-			return $s;
-		}
- 
-		/**
-		 * Prune the cache of stale entries
-		 */
-		protected function _cachePrune() {
-			foreach ($this->_getCacheFiles() as $file) {
-				if ((time() - filemtime($file)) > $this->_settings['cacheMaxAge']) {
-					unlink($file);
+		
+		$db = wfGetDB(DB_SLAVE);
+
+		extract($db->tableNames('recentchanges', 'page', 'revision', 'watchlist'));
+
+		$sql = "SELECT rev_id as revid, rev_page AS page, rc_id AS rcid
+FROM $recentchanges, $revision, $watchlist
+WHERE wl_user={$u->getID()} AND rc_namespace=wl_namespace AND rc_title=wl_title
+AND rev_id=rc_this_oldid $namespace_sql
+ORDER BY rev_id DESC LIMIT $count";
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
+					}
 				}
- 
 			}
 		}
- 
+	}
+
+	/**
+	 * Recently changes articles in a specified category
+	 */
+	protected function makeRecentCategoryPageChanges(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
+		$feed->title = wfMsg('wikifeeds_feed_recentcategorychanges_title', $category);
+		$feed->description = wfMsg('wikifeeds_feed_recentcategorychanges_description', $category);
+
+		$pagesIn = $this->getPagesInCategory($category);
+
+		// filter namespace
+		if (isset($namespace)) {
+			$namespace_sql = "AND rc_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
+		}			
+		
+		$db = wfGetDB(DB_SLAVE);
+		extract($db->tableNames('recentchanges', 'page', 'revision'));
+
+		$sql = "SELECT rev_id AS revid, rev_page AS page, rc_id AS rcid
+FROM $recentchanges, $revision
+WHERE rev_page IN (".implode(',', $pagesIn).")
+AND rev_deleted=0 AND rc_this_oldid=rev_id AND rev_minor_edit=0 $namespace_sql
+ORDER BY rev_id DESC LIMIT $count";
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
+					}
+				}
+			}
+		}
+
+	}
+
+	/**
+	 * Newest articles in a specified category
+	 */
+	protected function makeNewestArticlesInCategory(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
+		$catTitle = Title::newFromText($category, NS_CATEGORY);
+
+		$feed->title = wfMsg('wikifeeds_feed_newestarticlesincategory_title', $catTitle->getText());
+		$feed->description = wfMsg('wikifeeds_feed_newestarticlesincategory_description', $catTitle->getText());
+
+		// filter namespace
+		if (isset($namespace)) {
+			$namespace_sql = "AND page_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
+		}	
+		
+		$db = wfGetDB(DB_SLAVE);
+
+		extract($db->tableNames('page','categorylinks'));
+
+		/* pro potreby novinek recyklujeme clanky, nejnovejsi je tedy ten, na kterem byla udelana velka zmena */
+		$sql = "SELECT
+page_id AS page, MAX(rev_timestamp) AS cas
+FROM revision, $page, $categorylinks
+WHERE cl_to='{$catTitle->getDBkey()}' AND cl_from=page_id AND rev_page=page_id AND rev_minor_edit=0 $namespace_sql 
+GROUP BY page_id ORDER BY cas DESC LIMIT $count";
+
+/** 
+		$sql = "SELECT
+page_id AS page
+FROM $page,$categorylinks
+WHERE cl_to='{$catTitle->getDBkey()}' AND cl_from=page_id $namespace_sql
+ORDER BY cl_timestamp DESC LIMIT $count";
+*/
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title); 
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
+					}
+				}
+			}
+		}
+	}
+
 		/**
-		 * Purge the cache of all entries
-		 */
-		protected function _cachePurge() {
-			foreach ($this->_getCacheFiles() as $file) {
+	 * Recently changes articles in a specified category
+	 */
+	protected function makeRecentPageChangesNotInCategory(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
+		$feed->title = wfMsg('wikifeeds_feed_recentchangesnotincategory_title', $category);
+		$feed->description = wfMsg('wikifeeds_feed_recentchangesnotincategory_description', $category);
+
+		$pagesIn = $this->getPagesInCategory($category);
+
+		// filter namespace
+		if (isset($namespace)) {
+			$namespace_sql = "AND rc_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
+		}			
+		
+		$db = wfGetDB(DB_SLAVE);
+		extract($db->tableNames('recentchanges', 'page', 'revision'));
+
+		$sql = "SELECT rev_id AS revid, rev_page AS page, rc_id AS rcid
+FROM $recentchanges, $revision
+WHERE rev_page NOT IN (".implode(',', $pagesIn).")
+AND rev_deleted=0 AND rc_this_oldid=rev_id AND rev_minor_edit=0 $namespace_sql
+ORDER BY rev_id DESC LIMIT $count";
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title, $row['revid'], $row['rcid']);
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
+					}
+				}
+			}
+		}
+
+	}
+
+	/**
+	 * Newest articles NOT in a specified category
+	 */
+	protected function makeNewestArticlesNotInCategory(GenericXmlSyndicationFeed &$feed, $category, $namespace, $count = self::DEFAULT_COUNT) {
+		$catTitle = Title::newFromText($category, NS_CATEGORY);
+
+		$feed->title = wfMsg('wikifeeds_feed_newestarticlesnotincategory_title', $catTitle->getText());
+		$feed->description = wfMsg('wikifeeds_feed_newestarticlesnotincategory_description', $catTitle->getText());
+
+		$pagesIn = $this->getPagesInCategory($category);
+		
+		// filter namespace
+		if (isset($namespace)) {
+			$namespace_sql = "AND page_namespace = $namespace";
+		} else {
+			$namespace_sql = "";
+		}	
+		
+		$db = wfGetDB(DB_SLAVE);
+
+		extract($db->tableNames('page','recentchanges'));
+
+		$sql = "SELECT page_id AS page
+FROM $recentchanges,$page
+WHERE page_id NOT IN (".implode(',', $pagesIn).") AND rc_cur_id=page_id AND rc_new=1 AND page_is_redirect=0 $namespace_sql
+ORDER BY rc_timestamp DESC LIMIT $count";
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$title = Title::newFromID($row['page']);
+					$item = new MediaWikiFeedItem($title); 
+					if (!($title->isRestricted() or (NS_USER == $title->getNamespace()))) {
+						$feed->addItem($item);
+					}
+				}
+			}
+		}
+	}
+	
+	/**
+	 * Return all the pages in a given category
+	 */
+	protected function getPagesInCategory($catName) {
+		$db = wfGetDB(DB_SLAVE);
+
+		$catTitle = Title::newFromText($catName, NS_CATEGORY);
+
+		$db = wfGetDB(DB_SLAVE);
+
+		extract($db->tableNames('categorylinks'));
+
+		$sql = "SELECT cl_from AS page FROM $categorylinks WHERE cl_to='{$catTitle->getDBkey()}'";
+
+		$r = array();
+
+		if ($result = $db->query($sql)) {
+			if ($db->numRows($result)) {
+				while ($row = $db->fetchRow($result)) {
+					$r[] = $row['page'];
+				}
+			}
+		}
+
+		return $r;
+
+	}
+
+	/**
+	 * Fetch a feed from the cache
+	 *
+	 * This function will try to fetch a feed specified by type, format
+	 * and parameters from the cache.  If the feed does not exist in the
+	 * cache or if the cache entry is stale, we don't return anything
+	 *
+	 * @param $feed Feed type constant
+	 * @param $format Feed format constant
+	 * @param array $params Parameters to pass to the feed constructor
+	 *
+	 * @return array Array that describes the feed|false on failure
+	 */
+	protected function _cacheFetchFeed($feed, $format, $params) {
+		$filename = $this->_cacheFilename($feed, $format, $params);
+
+		if (file_exists($filename) && is_readable($filename)) {
+			if ( (time() - filemtime($filename)) < $this->_settings['cacheMaxAge']) {
+				$content = unserialize(file_get_contents($filename));
+
+				if (is_array($content)) {
+					return $content;
+				}
+			} else {
+				//the file is old, we might as well prune it now
+				//to save a few system calls
+				unlink($filename);
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Save a specified feed object corresponding to given parameters to the
+	 * cache
+	 */
+	protected function _cacheSaveFeed(GenericXmlSyndicationFeed $feedObj, $feed, $format, $params) {
+		$filename = $this->_cacheFilename($feed, $format, $params);
+
+		$cacheContent = array(
+	'content-type' => $feedObj->contentType,
+	'content' => $feedObj->getContent(false)
+		);
+
+		file_put_contents($filename, serialize($cacheContent), LOCK_EX);
+	}
+
+
+	/**
+	 * Returns the filename a specified feed should have
+	 *
+	 * @param $feed Feed type constant
+	 * @param $foramt Feed format constant
+	 * @param array $params Array of feed parameters
+	 */
+	protected function _cacheFilename($feed, $format, $params) {
+		$s = $this->_settings['cacheRoot'] . 'wikifeeds_cache-';
+
+		$s .= md5($feed.$format.serialize($params));
+
+		return $s;
+	}
+
+	/**
+	 * Prune the cache of stale entries
+	 */
+	protected function _cachePrune() {
+		foreach ($this->_getCacheFiles() as $file) {
+			if ((time() - filemtime($file)) > $this->_settings['cacheMaxAge']) {
 				unlink($file);
 			}
+
 		}
- 
-		/**
-		 * Returns an array of all files in the cache
-		 */
-		protected function _getCacheFiles() {
-			$return = array();
- 
-			$directory = new DirectoryIterator($this->_settings['cacheRoot']);
- 
-			foreach ($directory as $file) {
-				if ($file->isFile()) {
-					if (strpos($file->getPathname(), $this->_settings['cacheRoot'] . 'wikifeeds_cache-') === 0) {
-						$return[] = $file->getPathname();
-					}
+	}
+
+	/**
+	 * Purge the cache of all entries
+	 */
+	protected function _cachePurge() {
+		foreach ($this->_getCacheFiles() as $file) {
+			unlink($file);
+		}
+	}
+
+	/**
+	 * Returns an array of all files in the cache
+	 */
+	protected function _getCacheFiles() {
+		$return = array();
+
+		$directory = new DirectoryIterator($this->_settings['cacheRoot']);
+
+		foreach ($directory as $file) {
+			if ($file->isFile()) {
+				if (strpos($file->getPathname(), $this->_settings['cacheRoot'] . 'wikifeeds_cache-') === 0) {
+					$return[] = $file->getPathname();
 				}
 			}
- 
-			return $return;
 		}
- 
+
+		return $return;
 	}
- 
-	/**
-	 * This is a MediaWiki-specific definition of a feed item
-	 */
-	class MediaWikiFeedItem extends GenericXmlSyndicationFeedItem {
- 
-		public function __construct($title, $revId = 0, $rcid = 0) {
-			parent::__construct();
- 
-			$this->allowedVars = array_merge($this->allowedVars, array(
-        'mTitle','mRevId','mRCid','mArticle'
-        )
-        );
- 
-        $this->mTitle = $title;
-        $this->mRevId = $revId;
-        $this->mRCid = $rcid;
- 
-        $this->mArticle = new Article($this->mTitle);
- 
-        $this->mArticle->fetchContent($this->mRevId);
- 
-        $this->publishTime = wfTimestamp(TS_UNIX, $this->mArticle->mTimestamp);
-        $this->title = $this->mTitle->getFullText();
- 
-        if ($rcid == 0) {
-        	$this->guid = $this->mTitle->getFullURL();
-        }
-        else {
-        	$this->guid = $this->mTitle->escapeFullURL("oldid={$this->mRevId}");
-        }
- 
-        $this->linkSelf = $this->_guid;
-        $this->linkAlternate = $this->mTitle->getFullURL();
- 
-        $author = array();
- 
-        $author['name'] = $this->mArticle->getUserText();
- 
-        if ($u = User::newFromName($author['name'])) {
-        	$author['email'] = $u->getEmail();
- 
-        	$userPage = $u->getUserPage();
-        	$author['uri'] = $userPage->getFullURL();
-        }
- 
-        $this->_vars['authors'][] = $author;
- 
-        //create a new default user to invoke the parser
-        $u = new User();
- 
-        global $wgParser;
- 
-        $output = $wgParser->parse($this->mArticle->getContent(false), $this->mTitle, ParserOptions::newFromuser($u));
-        $text = $output->mText;
- 
-        //$this->_content = html_entity_decode($text);
-        $this->content = $text;
- 
-        $categories = $this->mTitle->getParentCategories();
- 
-        if (is_array($categories)) {
- 
-        	foreach ($categories as $c=>$v) {
-          $categoryTitle = Title::newFromText($c);
- 
-          $this->_vars['categories'][] = $categoryTitle->getText();
-        	}
-        }
-		}
- 
+
+}
+
+/**
+ * This is a MediaWiki-specific definition of a feed item
+ */
+class MediaWikiFeedItem extends GenericXmlSyndicationFeedItem {
+
+	public function __construct($title, $revId = 0, $rcid = 0) {
+		parent::__construct();
+
+		$this->allowedVars = array_merge($this->allowedVars, array(
+'mTitle','mRevId','mRCid','mArticle'
+)
+);
+
+$this->mTitle = $title;
+$this->mRevId = $revId;
+$this->mRCid = $rcid;
+
+$this->mArticle = new Article($this->mTitle);
+
+$this->mArticle->fetchContent($this->mRevId);
+
+$this->publishTime = wfTimestamp(TS_UNIX, $this->mArticle->mTimestamp);
+$this->title = $this->mTitle->getFullText();
+
+if ($rcid == 0) {
+	$this->guid = $this->mTitle->getFullURL();
+}
+else {
+	$this->guid = $this->mTitle->escapeFullURL("oldid={$this->mRevId}");
+}
+
+$this->linkSelf = $this->_guid;
+$this->linkAlternate = $this->mTitle->getFullURL();
+
+$author = array();
+
+$author['name'] = $this->mArticle->getUserText();
+
+if ($u = User::newFromName($author['name'])) {
+	$author['email'] = $u->getEmail();
+
+	$userPage = $u->getUserPage();
+	$author['uri'] = $userPage->getFullURL();
+}
+
+$this->_vars['authors'][] = $author;
+
+//create a new default user to invoke the parser
+$u = new User();
+
+global $wgParser;
+
+$output = $wgParser->parse($this->mArticle->getContent(false), $this->mTitle, ParserOptions::newFromuser($u));
+$text = $output->mText;
+
+//$this->_content = html_entity_decode($text);
+$this->content = $text;
+
+$categories = $this->mTitle->getParentCategories();
+
+if (is_array($categories)) {
+
+	foreach ($categories as $c=>$v) {
+  $categoryTitle = Title::newFromText($c);
+
+  $this->_vars['categories'][] = $categoryTitle->getText();
 	}
- 
-	SpecialPage::addPage(new SpecialWikiFeeds);
+}
+	}
+
 }
  
 /**
